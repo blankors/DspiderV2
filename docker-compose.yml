@@ -1,0 +1,215 @@
+# 开发环境监控配置
+x-develop: &develop
+  watch:
+    # 所有服务通用监控规则
+    - action: sync
+      path: ./src
+      target: /app/src
+    - action: restart
+      path: ./src
+    - action: sync
+      path: ./config
+      target: /app/config
+    - action: restart
+      path: ./config
+    # 只有修改Dockerfile或依赖时才重建
+    - action: rebuild
+      path: ./docker
+    - action: rebuild
+      path: ./pyproject.toml
+    - action: rebuild
+      path: ./uv.lock
+
+services:
+  # MongoDB服务
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    restart: always
+    volumes:
+      - ./data/mongo_data:/data/db
+    ports:
+      - "27018:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=admin123
+      - MONGO_INITDB_DATABASE=spider_db
+    healthcheck:
+      test: >
+        mongosh
+        --username admin
+        --password admin123
+        --authenticationDatabase admin
+        --host 127.0.0.1
+        --port 27017
+        --eval 'db.adminCommand("ping")'
+        --quiet
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - spider_network
+
+  # MySQL服务
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    restart: always
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3307:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=admin123
+      - MYSQL_DATABASE=spider_db
+      - MYSQL_USER=dspider
+      - MYSQL_PASSWORD=dspider_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - spider_network
+
+  # RabbitMQ服务
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: rabbitmq
+    restart: always
+    volumes:
+      - ./data/rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin123
+      - RABBITMQ_DEFAULT_VHOST=/spider
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - spider_network
+
+  # MinIO服务
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    restart: always
+    volumes:
+      - ./data/minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=admin123
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - spider_network
+
+
+  # Master节点
+  master:
+    build:
+      context: .
+      dockerfile: ./docker/master.Dockerfile
+    container_name: master
+    restart: always
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./logs/master:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - spider_network
+    develop: *develop
+
+  # Worker节点（可以扩展多个）
+  worker:
+    build:
+      context: .
+      dockerfile: ./docker/worker.Dockerfile
+    restart: always
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./logs/worker:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - spider_network
+    develop: *develop
+
+  # Celery Worker节点
+  celery_worker:
+    build:
+      context: .
+      dockerfile: ./docker/celery_worker.Dockerfile
+    restart: always
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./logs/celery_worker:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - spider_network
+    develop: *develop
+
+  # Processor节点
+  processor:
+    build:
+      context: .
+      dockerfile: ./docker/processor.Dockerfile
+    container_name: processor
+    restart: always
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./logs/processor:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - spider_network
+    develop: *develop
+
+volumes:
+  mongo_data:
+  rabbitmq_data:
+  mysql_data:
+
+networks:
+  spider_network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.30.0.0/16

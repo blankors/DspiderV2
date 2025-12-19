@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  # 复现测试服务
+  reproduce_test:
+    build:
+      context: .
+      dockerfile: ./docker/reproduce.Dockerfile
+    container_name: reproduce_test
+    restart: "no"
+    volumes:
+      - ./src:/app/src
+      - ./test:/app/test
+      - ./config:/app/config
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - spider_network
+
+  # 可选的RabbitMQ服务（如果测试需要）
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: rabbitmq_test
+    restart: "no"
+    ports:
+      - "5672:5672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin123
+      - RABBITMQ_DEFAULT_VHOST=/spider
+    networks:
+      - spider_network
+
+networks:
+  spider_network:
+    driver: bridge
