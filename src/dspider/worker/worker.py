@@ -1,0 +1,1 @@
+from dspider.common.load_config import config

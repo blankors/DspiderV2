@@ -1,0 +1,8 @@
+README.md
+pyproject.toml
+src/dspider.egg-info/PKG-INFO
+src/dspider.egg-info/SOURCES.txt
+src/dspider.egg-info/dependency_links.txt
+src/dspider.egg-info/requires.txt
+src/dspider.egg-info/top_level.txt
+src/dspider/common/load_config.py
