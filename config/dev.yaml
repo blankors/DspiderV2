@@ -1,0 +1,55 @@
+mongodb:
+  host: localhost
+  port: 27018
+  username: admin
+  password: admin123
+  db_name: spider_db
+mysql:
+  host: mysql
+  port: 3306
+  user: dspider
+  password: dspider_password
+  db: spider_db
+  use_pool: true
+  mincached: 5
+  maxcached: 20
+  maxconnections: 100
+rabbitmq:
+  host: localhost
+  port: 5672
+  username: admin
+  password: admin123
+  virtualhost: /spider
+minio:
+  host: localhost
+  port: 9000
+  access_key: admin
+  secret_key: admin123
+  secure: false
+master:
+  task_queue: spider_tasks
+  exchange_name: spider_exchange
+  routing_key: task
+  task_batch_size: 100
+  polling_interval: 5
+worker:
+  # worker_id: worker_1
+  task_queue:
+    queue_name: spider_tasks
+    prefetch_count: 1
+  result_queue: spider_results
+  max_thread_pool_workers: 20
+  max_concurrent_tasks: 5
+  heartbeat_interval: 30
+  retry_attempts: 3
+  retry_delay: 2.0
+processor:
+  result_queue: spider_results
+  exchange_name: spider_exchange
+  routing_key: task
+  collection_name: spider_results
+  batch_size: 50
+  processing_interval: 10
+logging:
+  level: INFO
+  file: logs/dev_app.log
