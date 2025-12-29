@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch, MagicMock
 from typing import Dict, Any
 from concurrent.futures import Future
 
-from dspider.worker.worker import Worker, WorkerStatus, TaskProcessor, DefaultTaskProcessor
+from dspider.worker.worker_temp import Worker, WorkerStatus, TaskProcessor, DefaultTaskProcessor
 from dspider.common.load_config import config
 
 class TestWorker(unittest.TestCase):

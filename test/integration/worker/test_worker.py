@@ -7,7 +7,7 @@ import pika
 from typing import Dict, Any
 from unittest.mock import Mock, patch
 
-from dspider.worker.worker import Worker, WorkerStatus, DefaultTaskProcessor
+from dspider.worker.worker_temp import Worker, WorkerStatus, DefaultTaskProcessor
 from dspider.common.rabbitmq_service import RabbitMQService
 from dspider.common.load_config import config
 

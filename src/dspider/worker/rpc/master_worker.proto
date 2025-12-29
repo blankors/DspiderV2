@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package master_worker;
+
+// 定义心跳请求消息
+message HeartbeatRequest {
+    string worker_id = 1;        // 工作节点ID
+    string worker_address = 2;   // 工作节点地址
+    int64 timestamp = 3;         // 时间戳
+    string status = 4;           // 节点状态 (idle/busy/error)
+}
+
+// 定义心跳响应消息
+message HeartbeatResponse {
+    bool success = 1;            // 是否成功
+    string message = 2;          // 响应消息
+    int64 master_timestamp = 3;  // 主节点时间戳
+}
+
+// 定义注册请求消息
+message RegisterRequest {
+    string worker_id = 1;
+    string worker_address = 2;
+    int32 cpu_core = 3;          // CPU核心数
+    int64 memory = 4;            // 内存大小(MB)
+}
+
+// 定义注册响应消息
+message RegisterResponse {
+    bool success = 1;
+    string message = 2;
+    string master_address = 3;
+}
+
+
+
+// 定义主节点服务
+service MasterService {
+    // 工作节点注册接口
+    rpc Register(RegisterRequest) returns (RegisterResponse);
+    // 工作节点心跳上报接口
+    rpc SendHeartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
