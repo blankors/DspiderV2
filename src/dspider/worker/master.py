@@ -102,15 +102,95 @@ class MasterService(master_service_pb2_grpc.MasterServiceServicer):
 
 class Master:
     def __init__(self, nacos_service, mongodb_service, redis_service, rabbitmq_service):
-        # 维护Master状态
-        # 从Redis查询是否已有Master
         self.nacos_service = nacos_service
         self.mongodb_service = mongodb_service
         self.redis_service = redis_service
         self.rabbitmq_service = rabbitmq_service
+        self.grpc_server = None
         self.master_service = MasterService()
-        self.worker_index = 0
+        self.rpc_thnum = 10
+        self.last_distribute_worker_index = 0
+    
+    def start_rpc(self):
+        self.grpc_server = grpc.server(futures.ThreadPoolExecutor(max_workers=self.rpc_thnum))
+        master_service_pb2_grpc.add_MasterServiceServicer_to_server(self.master_service, self.grpc_server)
+        self.grpc_server.add_insecure_port(self.address)
+        self.grpc_server.start()
+        logger.info(f"[Master] 服务已启动，监听地址：{self.address}")
+        try:
+            self.grpc_server.wait_for_termination()
+        except KeyboardInterrupt:
+            self.grpc_server.stop(0)
+            logger.info("[Master] 服务已停止")
+
+    def start(self):
+        self.address = MASTER_ADDRESS
+        try:
+            self.rpc_thread = threading.Thread(target=self.start_rpc, daemon=True) # daemon
+            self.rpc_thread.start()
+            
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.schedule())
+        except KeyboardInterrupt:
+            logger.info("[Master] 服务已停止")
+        except Exception as e:
+            logger.error(f"Error in master: {e}")
+
+    async def schedule(self):
+        try:
+            time.sleep(10) # 调整为先启动worker再启动master，worker找不到master 3s重试
+            await self.schedule_once()
+            await self.schedule_backend()
+        except Exception as e:
+            logger.error(f"Error scheduling tasks: {e}")
+            raise e
         
+    async def schedule_once(self):
+        """Master刚启动时调用一次，调度所有任务
+        """
+        info = await self.get_info() # 必须要等到所有worker加入到nacos才可以获取到所有worker的信息
+        servs = info["servs"]
+        tasks = info["tasks"]
+        server_idx = 0
+        for task in tasks:
+            serv = servs[server_idx]
+            try_count = 0
+            while True:
+                try_count += 1
+                if try_count > 3:
+                    logger.error(f"Error scheduling task {task} to server {serv['ip']}:{serv['port']}: try 3 times")
+                    break
+                
+                try:
+                    self.distribute_task(task=task)
+                except Exception as e:
+                    pass
+                else:
+                    break
+                
+    async def schedule_backend(self):
+        servs = await self.nacos_service.get_instances()
+        self.rabbitmq_service.consume(callback=self.mq_callback)
+
+    async def get_info(self):
+        servs = await self.nacos_service.get_instances()
+        status = self.redis_service.get("worker_status")
+        tasks = self.get_tasks()
+        
+        return {"servs": servs, "status": status, "tasks": tasks}
+    
+    def get_tasks(self):
+        tasks = self.mongodb_service.find({"status": 0})
+        return tasks
+
+    async def mq_callback(self, data):
+        task = data["task"]
+        info = await self.get_info()
+        servs = info["servs"]
+        self.distribute_task(task=task)
+        self.mongodb_service.insert({"task_id": task["task_id"], "status": 1}) # 持久化任务
+
     def select_worker(self):
         """选择一个可用的 Worker（轮询负载均衡）"""
         with self.master_service.lock:
@@ -123,17 +203,19 @@ class Master:
                 logger.warning("[Master] 没有可用的 Worker")
                 return None, None
             
-            worker_id = available_workers[self.worker_index % len(available_workers)]
-            self.worker_index += 1
+            worker_index = self.last_distribute_worker_index + 1
+            worker_id = available_workers[worker_index % len(available_workers)]
+            self.worker_index = worker_index
             
             worker_info = self.master_service.workers[worker_id]
             logger.info(f"[Master] 选择 Worker {worker_id}，地址：{worker_info['address']}")
             return worker_id, worker_info["address"]
 
-    def distribute_task(self, worker_id, worker_address, task):
+    def distribute_task(self, task):
         """通过 gRPC 分发任务给 Worker"""
         try:
-            channel = grpc.insecure_channel(worker_address)
+            worker_id, addr = self.select_worker()
+            channel = grpc.insecure_channel(addr)
             stub = worker_service_pb2_grpc.WorkerServiceStub(channel)
             
             request = worker_service_pb2.DistributeTaskRequest(
@@ -162,104 +244,11 @@ class Master:
                 return False, response.message
                 
         except grpc.RpcError as e:
-            logger.error(f"[Master] gRPC 调用 Worker {worker_id} 失败：{e}")
-            return False, str(e)
+            logger.exception(f"[Master] gRPC 调用 Worker {worker_id} 失败：{e}")
+            raise
         except Exception as e:
-            logger.error(f"[Master] 任务分发异常：{e}")
-            return False, str(e)
-
-    def start(self):
-        self.address = MASTER_ADDRESS
-        try:
-            self.rpc_thread = threading.Thread(target=self.rpc, daemon=True)
-            self.rpc_thread.start()
-            
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.schedule())
-            
-            self.rpc_thread.join()
-            self.schedule_thread.join()
-        except KeyboardInterrupt:
-            logger.info("[Master] 服务已停止")
-        except Exception as e:
-            logger.error(f"Error in master: {e}")
-
-    def rpc(self):
-        self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-        master_service_pb2_grpc.add_MasterServiceServicer_to_server(self.master_service, self.server)
-        self.server.add_insecure_port(self.address)
-        self.server.start()
-        logger.info(f"[Master] 服务已启动，监听地址：{self.address}")
-        try:
-            while True:
-                time.sleep(86400)  # 保持服务运行
-        except KeyboardInterrupt:
-            self.server.stop(0)
-            logger.info("[Master] 服务已停止")
-
-    def get_tasks(self):
-        tasks = self.mongodb_service.find({"status": 0})
-        return tasks
-    
-    async def schedule(self):
-        try:
-            time.sleep(10)
-            await self.schedule_once()
-            await self.schedule_backend()
-        except Exception as e:
-            logger.error(f"Error scheduling tasks: {e}")
-            raise e
-        
-    async def get_info(self):
-        servs = await self.nacos_service.get_instances()
-        status = self.redis_service.get("worker_status")
-        tasks = self.get_tasks()
-        
-        return {"servs": servs, "status": status, "tasks": tasks}
-        
-    async def schedule_once(self):
-        """Master刚启动时调用一次，调度所有任务
-        """
-        info = await self.get_info() # 必须要等到所有worker加入到nacos才可以获取到所有worker的信息
-        servs = info["servs"]
-        tasks = info["tasks"]
-        server_idx = 0
-        for task in tasks:
-            serv = servs[server_idx]
-            try_count = 0
-            while True:
-                try_count += 1
-                if try_count > 3:
-                    logger.error(f"Error scheduling task {task} to server {serv['ip']}:{serv['port']}: try 3 times")
-                    break
-                
-                try:
-                    # resp = requests.post(f"http://{serv['ip']}:{serv['port']}/worker/task", json=task)
-                    # if resp.status_code != 200:
-                    #     raise
-                    worker_id, addr = self.select_worker()
-                    self.distribute_task(worker_id=worker_id, worker_address=addr, task=task)
-                except Exception as e:
-                    # logger.warning(f"请求 {serv['ip']}:{serv['port']} 失败，尝试第 {try_count} 次")
-                    logger.warning(f"请求 {worker_id} {addr} 失败，尝试第 {try_count} 次")
-                else:
-                    # logger.info(f"Schedule task {task} to server {serv['ip']}:{serv['port']}")
-                    logger.info(f"Schedule task {task} to worker {worker_id} {addr}")
-                    break
-
-            # server_idx = (server_idx + 1) % len(servs)
-                
-    async def schedule_backend(self):
-        servs = await self.nacos_service.get_instances()
-        self.rabbitmq_service.consume(callback=self.xxx)
-
-    async def xxx(self, data):
-        task = data["task"]
-        info = await self.get_info()
-        servs = info["servs"]
-        rpc(serv, task)
-        self.mongodb_service.insert({"task_id": task["task_id"], "status": 1})
+            logger.exception(f"[Master] 任务分发异常：{e}")
+            raise
 
 if __name__ == "__main__":
     m = Master()
