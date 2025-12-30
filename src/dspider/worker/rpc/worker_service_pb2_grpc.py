@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-import dspider.worker.rpc.master_worker_pb2 as master__worker__pb2
+import dspider.worker.rpc.worker_service_pb2 as worker__service__pb2
 
 GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
@@ -18,14 +18,14 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in master_worker_pb2_grpc.py depends on'
+        + ' but the generated code in worker_service_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
     )
 
 
-class MasterServiceStub(object):
+class WorkerServiceStub(object):
     """定义主节点服务
     """
 
@@ -35,63 +35,63 @@ class MasterServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.Register = channel.unary_unary(
-                '/master_worker.MasterService/Register',
-                request_serializer=master__worker__pb2.RegisterRequest.SerializeToString,
-                response_deserializer=master__worker__pb2.RegisterResponse.FromString,
+        self.DistributeTask = channel.unary_unary(
+                '/worker_service.WorkerService/DistributeTask',
+                request_serializer=worker__service__pb2.DistributeTaskRequest.SerializeToString,
+                response_deserializer=worker__service__pb2.DistributeTaskResponse.FromString,
                 _registered_method=True)
-        self.SendHeartbeat = channel.unary_unary(
-                '/master_worker.MasterService/SendHeartbeat',
-                request_serializer=master__worker__pb2.HeartbeatRequest.SerializeToString,
-                response_deserializer=master__worker__pb2.HeartbeatResponse.FromString,
+        self.UpdateTaskStatus = channel.unary_unary(
+                '/worker_service.WorkerService/UpdateTaskStatus',
+                request_serializer=worker__service__pb2.TaskStatusRequest.SerializeToString,
+                response_deserializer=worker__service__pb2.TaskStatusResponse.FromString,
                 _registered_method=True)
 
 
-class MasterServiceServicer(object):
+class WorkerServiceServicer(object):
     """定义主节点服务
     """
 
-    def Register(self, request, context):
-        """工作节点注册接口
+    def DistributeTask(self, request, context):
+        """任务分发接口
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def SendHeartbeat(self, request, context):
-        """工作节点心跳上报接口
+    def UpdateTaskStatus(self, request, context):
+        """任务状态更新接口
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
 
-def add_MasterServiceServicer_to_server(servicer, server):
+def add_WorkerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'Register': grpc.unary_unary_rpc_method_handler(
-                    servicer.Register,
-                    request_deserializer=master__worker__pb2.RegisterRequest.FromString,
-                    response_serializer=master__worker__pb2.RegisterResponse.SerializeToString,
+            'DistributeTask': grpc.unary_unary_rpc_method_handler(
+                    servicer.DistributeTask,
+                    request_deserializer=worker__service__pb2.DistributeTaskRequest.FromString,
+                    response_serializer=worker__service__pb2.DistributeTaskResponse.SerializeToString,
             ),
-            'SendHeartbeat': grpc.unary_unary_rpc_method_handler(
-                    servicer.SendHeartbeat,
-                    request_deserializer=master__worker__pb2.HeartbeatRequest.FromString,
-                    response_serializer=master__worker__pb2.HeartbeatResponse.SerializeToString,
+            'UpdateTaskStatus': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpdateTaskStatus,
+                    request_deserializer=worker__service__pb2.TaskStatusRequest.FromString,
+                    response_serializer=worker__service__pb2.TaskStatusResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'master_worker.MasterService', rpc_method_handlers)
+            'worker_service.WorkerService', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('master_worker.MasterService', rpc_method_handlers)
+    server.add_registered_method_handlers('worker_service.WorkerService', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
-class MasterService(object):
+class WorkerService(object):
     """定义主节点服务
     """
 
     @staticmethod
-    def Register(request,
+    def DistributeTask(request,
             target,
             options=(),
             channel_credentials=None,
@@ -104,9 +104,9 @@ class MasterService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/master_worker.MasterService/Register',
-            master__worker__pb2.RegisterRequest.SerializeToString,
-            master__worker__pb2.RegisterResponse.FromString,
+            '/worker_service.WorkerService/DistributeTask',
+            worker__service__pb2.DistributeTaskRequest.SerializeToString,
+            worker__service__pb2.DistributeTaskResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -118,7 +118,7 @@ class MasterService(object):
             _registered_method=True)
 
     @staticmethod
-    def SendHeartbeat(request,
+    def UpdateTaskStatus(request,
             target,
             options=(),
             channel_credentials=None,
@@ -131,9 +131,9 @@ class MasterService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/master_worker.MasterService/SendHeartbeat',
-            master__worker__pb2.HeartbeatRequest.SerializeToString,
-            master__worker__pb2.HeartbeatResponse.FromString,
+            '/worker_service.WorkerService/UpdateTaskStatus',
+            worker__service__pb2.TaskStatusRequest.SerializeToString,
+            worker__service__pb2.TaskStatusResponse.FromString,
             options,
             channel_credentials,
             insecure,

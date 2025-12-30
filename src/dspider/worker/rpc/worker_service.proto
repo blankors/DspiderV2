@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package worker_service;
+
+// 定义任务数据消息
+message TaskData {
+    string task_id = 1;          // 任务ID
+    string url = 2;              // 目标URL
+    string method = 3;           // HTTP方法 (GET/POST)
+    map<string, string> headers = 4;  // 请求头
+    string body = 5;             // 请求体
+    int32 priority = 6;          // 任务优先级
+    int32 retry_count = 7;       // 重试次数
+    map<string, string> metadata = 8;  // 元数据
+}
+
+// 定义任务分发请求消息
+message DistributeTaskRequest {
+    string worker_id = 1;        // 目标Worker ID
+    TaskData task = 2;           // 任务数据
+    int64 timestamp = 3;         // 分发时间戳
+}
+
+// 定义任务分发响应消息
+message DistributeTaskResponse {
+    bool success = 1;            // 是否成功
+    string message = 2;          // 响应消息
+    string task_id = 3;          // 任务ID
+    int64 worker_timestamp = 4;  // Worker接收时间戳
+}
+
+// 定义任务状态更新请求消息
+message TaskStatusRequest {
+    string worker_id = 1;        // Worker ID
+    string task_id = 2;          // 任务ID
+    int32 status = 3;            // 任务状态 (0:待执行, 1:执行中, 2:成功, 3:失败)
+    string result = 4;           // 执行结果
+    int64 timestamp = 5;         // 更新时间戳
+}
+
+// 定义任务状态更新响应消息
+message TaskStatusResponse {
+    bool success = 1;            // 是否成功
+    string message = 2;          // 响应消息
+    int64 master_timestamp = 3;  // Master接收时间戳
+}
+
+// 定义主节点服务
+service WorkerService {
+    // 任务分发接口
+    rpc DistributeTask(DistributeTaskRequest) returns (DistributeTaskResponse);
+    // 任务状态更新接口
+    rpc UpdateTaskStatus(TaskStatusRequest) returns (TaskStatusResponse);
+}

@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package master_worker;
+package master_service;
 
 // 定义心跳请求消息
 message HeartbeatRequest {
@@ -31,8 +31,6 @@ message RegisterResponse {
     string message = 2;
     string master_address = 3;
 }
-
-
 
 // 定义主节点服务
 service MasterService {

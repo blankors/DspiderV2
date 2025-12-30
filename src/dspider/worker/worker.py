@@ -2,13 +2,83 @@ import grpc
 import time
 import threading
 import uuid
-from dspider.worker.rpc import master_worker_pb2
-from dspider.worker.rpc import master_worker_pb2_grpc
+from concurrent import futures
+import logging
 
+from dspider.worker.rpc import master_service_pb2
+from dspider.worker.rpc import master_service_pb2_grpc
+from dspider.worker.rpc import worker_service_pb2
+from dspider.worker.rpc import worker_service_pb2_grpc
+
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                    datefmt="%Y-%m-%d %H:%M:%S",
+                    handlers=[logging.StreamHandler()]
+                    )
+logger = logging.getLogger(__name__)
+
+class WorkerService(worker_service_pb2_grpc.WorkerServiceServicer):
+    def __init__(self, worker):
+        self.worker = worker
+
+    def DistributeTask(self, request, context):
+        """接收Master分发的任务"""
+        print(f"[Worker {self.worker.worker_id}] 收到任务分发请求")
+        print(f"  任务ID: {request.task.task_id}")
+        print(f"  URL: {request.task.url}")
+        print(f"  方法: {request.task.method}")
+        print(f"  优先级: {request.task.priority}")
+        
+        try:
+            self.worker.set_status("busy")
+            
+            response = worker_service_pb2.DistributeTaskResponse(
+                success=True,
+                message=f"任务 {request.task.task_id} 已接收",
+                task_id=request.task.task_id,
+                worker_timestamp=int(time.time())
+            )
+            return response
+        except Exception as e:
+            print(f"[Worker {self.worker.worker_id}] 任务分发处理失败: {e}")
+            response = worker_service_pb2.DistributeTaskResponse(
+                success=False,
+                message=f"任务分发失败: {str(e)}",
+                task_id=request.task.task_id,
+                worker_timestamp=int(time.time())
+            )
+            return response
+
+    def UpdateTaskStatus(self, request, context):
+        """更新任务状态"""
+        print(f"[Worker {self.worker.worker_id}] 收到任务状态更新请求")
+        print(f"  任务ID: {request.task_id}")
+        print(f"  状态: {request.status}")
+        print(f"  结果: {request.result}")
+        
+        try:
+            response = worker_service_pb2.TaskStatusResponse(
+                success=True,
+                message=f"任务 {request.task_id} 状态已更新",
+                master_timestamp=int(time.time())
+            )
+            return response
+        except Exception as e:
+            print(f"[Worker {self.worker.worker_id}] 任务状态更新失败: {e}")
+            response = worker_service_pb2.TaskStatusResponse(
+                success=False,
+                message=f"任务状态更新失败: {str(e)}",
+                master_timestamp=int(time.time())
+            )
+            return response
+
+MASTER_ADDRESS = "127.0.0.1:50011"
+WORKER_ADDRESS = "127.0.0.1:50021"
 class Worker:
-    def __init__(self, master_address="localhost:50051", worker_address="localhost:0"):
+    def __init__(self, master_address=MASTER_ADDRESS, worker_address=WORKER_ADDRESS):
         self.master_address = master_address
         self.worker_address = worker_address
+        self.worker_service = WorkerService(self)
         # 生成唯一的Worker ID
         self.worker_id = f"worker_{uuid.uuid4().hex[:8]}"
         # CPU核心数（模拟）
@@ -22,12 +92,12 @@ class Worker:
         self.running = False
         # 创建gRPC通道
         self.channel = grpc.insecure_channel(self.master_address)
-        self.stub = master_worker_pb2_grpc.MasterServiceStub(self.channel)
+        self.stub = master_service_pb2_grpc.MasterServiceStub(self.channel)
 
     def register(self):
         """向Master注册"""
         try:
-            request = master_worker_pb2.RegisterRequest(
+            request = master_service_pb2.RegisterRequest(
                 worker_id=self.worker_id,
                 worker_address=self.worker_address,
                 cpu_core=self.cpu_core,
@@ -48,7 +118,7 @@ class Worker:
         """发送心跳包（循环执行）"""
         while self.running:
             try:
-                request = master_worker_pb2.HeartbeatRequest(
+                request = master_service_pb2.HeartbeatRequest(
                     worker_id=self.worker_id,
                     worker_address=self.worker_address,
                     timestamp=int(time.time()),
@@ -84,9 +154,27 @@ class Worker:
         self.heartbeat_thread.start()
         print(f"[Worker {self.worker_id}] 已启动，开始发送心跳（每3秒一次）")
         try:
-            while True:
-                time.sleep(86400)
+            self.rpc()
         except KeyboardInterrupt:
+            self.server.stop(0)
+            logger.info(f"[Worker {self.worker_id}] 服务已停止")
+            self.running = False
+            self.heartbeat_thread.join()
+            self.channel.close()
+            print(f"[Worker {self.worker_id}] 已停止")
+            
+    def rpc(self):
+        self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+        worker_service_pb2_grpc.add_WorkerServiceServicer_to_server(self.worker_service, self.server)
+        self.server.add_insecure_port(self.worker_address)
+        self.server.start()
+        logger.info(f"[Worker {self.worker_id}] 服务已启动，监听地址：{self.worker_address}")
+        try:
+            while True:
+                time.sleep(86400)  # 保持服务运行
+        except KeyboardInterrupt:
+            self.server.stop(0)
+            logger.info(f"[Worker {self.worker_id}] 服务已停止")
             self.running = False
             self.heartbeat_thread.join()
             self.channel.close()

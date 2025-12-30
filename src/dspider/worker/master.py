@@ -9,7 +9,8 @@ import grpc
 from concurrent import futures
 
 from dspider.common.nacos_service import NacosService
-from dspider.worker.rpc import master_worker_pb2, master_worker_pb2_grpc
+from dspider.worker.rpc import master_service_pb2, master_service_pb2_grpc
+from dspider.worker.rpc import worker_service_pb2, worker_service_pb2_grpc  
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -20,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 # 定义心跳超时时间（秒）
 HEARTBEAT_TIMEOUT = 10
-MASTER_ADDRESS = "localhost:50051"
-class MasterService(master_worker_pb2_grpc.MasterServiceServicer):
+MASTER_ADDRESS = "127.0.0.1:50011"
+class MasterService(master_service_pb2_grpc.MasterServiceServicer):
     def __init__(self):
         # 存储工作节点信息：{worker_id: {address, last_heartbeat, status, cpu, memory}}
         self.workers = {}
@@ -35,13 +36,13 @@ class MasterService(master_worker_pb2_grpc.MasterServiceServicer):
         with self.lock:
             worker_id = request.worker_id
             if worker_id in self.workers:
-                response = master_worker_pb2.RegisterResponse(
+                response = master_service_pb2.RegisterResponse(
                     success=True,
                     message=f"Worker {worker_id} 已存在，更新信息",
                     master_address=MASTER_ADDRESS
                 )
             else:
-                response = master_worker_pb2.RegisterResponse(
+                response = master_service_pb2.RegisterResponse(
                     success=True,
                     message=f"Worker {worker_id} 注册成功",
                     master_address=MASTER_ADDRESS
@@ -64,7 +65,7 @@ class MasterService(master_worker_pb2_grpc.MasterServiceServicer):
             worker_id = request.worker_id
             if worker_id not in self.workers:
                 # 未注册的Worker，返回失败
-                response = master_worker_pb2.HeartbeatResponse(
+                response = master_service_pb2.HeartbeatResponse(
                     success=False,
                     message=f"Worker {worker_id} 未注册，请先注册",
                     master_timestamp=int(time.time())
@@ -74,7 +75,7 @@ class MasterService(master_worker_pb2_grpc.MasterServiceServicer):
                 # 更新心跳时间和状态
                 self.workers[worker_id]["last_heartbeat"] = time.time()
                 self.workers[worker_id]["status"] = request.status
-                response = master_worker_pb2.HeartbeatResponse(
+                response = master_service_pb2.HeartbeatResponse(
                     success=True,
                     message=f"心跳接收成功",
                     master_timestamp=int(time.time())
@@ -107,12 +108,72 @@ class Master:
         self.mongodb_service = mongodb_service
         self.redis_service = redis_service
         self.rabbitmq_service = rabbitmq_service
+        self.master_service = MasterService()
+        self.worker_index = 0
+        
+    def select_worker(self):
+        """选择一个可用的 Worker（轮询负载均衡）"""
+        with self.master_service.lock:
+            available_workers = [
+                worker_id for worker_id, info in self.master_service.workers.items()
+                if info["status"] == "idle"
+            ]
+            
+            if not available_workers:
+                logger.warning("[Master] 没有可用的 Worker")
+                return None, None
+            
+            worker_id = available_workers[self.worker_index % len(available_workers)]
+            self.worker_index += 1
+            
+            worker_info = self.master_service.workers[worker_id]
+            logger.info(f"[Master] 选择 Worker {worker_id}，地址：{worker_info['address']}")
+            return worker_id, worker_info["address"]
+
+    def distribute_task(self, worker_id, worker_address, task):
+        """通过 gRPC 分发任务给 Worker"""
+        try:
+            channel = grpc.insecure_channel(worker_address)
+            stub = worker_service_pb2_grpc.WorkerServiceStub(channel)
+            
+            request = worker_service_pb2.DistributeTaskRequest(
+                worker_id=worker_id,
+                task=worker_service_pb2.TaskData(
+                    task_id=task.get("task_id", ""),
+                    url=task.get("url", ""),
+                    method=task.get("method", "GET"),
+                    headers=task.get("headers", {}),
+                    body=task.get("body", ""),
+                    priority=task.get("priority", 0),
+                    retry_count=task.get("retry_count", 0),
+                    metadata=task.get("metadata", {})
+                ),
+                timestamp=int(time.time())
+            )
+            
+            response = stub.DistributeTask(request)
+            channel.close()
+            
+            if response.success:
+                logger.info(f"[Master] 任务 {response.task_id} 成功分发到 Worker {worker_id}")
+                return True, response.message
+            else:
+                logger.error(f"[Master] 任务分发失败：{response.message}")
+                return False, response.message
+                
+        except grpc.RpcError as e:
+            logger.error(f"[Master] gRPC 调用 Worker {worker_id} 失败：{e}")
+            return False, str(e)
+        except Exception as e:
+            logger.error(f"[Master] 任务分发异常：{e}")
+            return False, str(e)
 
     def start(self):
         self.address = MASTER_ADDRESS
         try:
             self.rpc_thread = threading.Thread(target=self.rpc, daemon=True)
             self.rpc_thread.start()
+            
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self.schedule())
@@ -126,7 +187,7 @@ class Master:
 
     def rpc(self):
         self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-        master_worker_pb2_grpc.add_MasterServiceServicer_to_server(MasterService(), self.server)
+        master_service_pb2_grpc.add_MasterServiceServicer_to_server(self.master_service, self.server)
         self.server.add_insecure_port(self.address)
         self.server.start()
         logger.info(f"[Master] 服务已启动，监听地址：{self.address}")
@@ -143,6 +204,7 @@ class Master:
     
     async def schedule(self):
         try:
+            time.sleep(10)
             await self.schedule_once()
             await self.schedule_backend()
         except Exception as e:
@@ -173,16 +235,20 @@ class Master:
                     break
                 
                 try:
-                    resp = requests.post(f"http://{serv['ip']}:{serv['port']}/worker/task", json=task)
-                    if resp.status_code != 200:
-                        raise
+                    # resp = requests.post(f"http://{serv['ip']}:{serv['port']}/worker/task", json=task)
+                    # if resp.status_code != 200:
+                    #     raise
+                    worker_id, addr = self.select_worker()
+                    self.distribute_task(worker_id=worker_id, worker_address=addr, task=task)
                 except Exception as e:
-                    logger.warning(f"请求 {serv['ip']}:{serv['port']} 失败，尝试第 {try_count} 次")
+                    # logger.warning(f"请求 {serv['ip']}:{serv['port']} 失败，尝试第 {try_count} 次")
+                    logger.warning(f"请求 {worker_id} {addr} 失败，尝试第 {try_count} 次")
                 else:
-                    logger.info(f"Schedule task {task} to server {serv['ip']}:{serv['port']}")
+                    # logger.info(f"Schedule task {task} to server {serv['ip']}:{serv['port']}")
+                    logger.info(f"Schedule task {task} to worker {worker_id} {addr}")
                     break
 
-            server_idx = (server_idx + 1) % len(servs)
+            # server_idx = (server_idx + 1) % len(servs)
                 
     async def schedule_backend(self):
         servs = await self.nacos_service.get_instances()
