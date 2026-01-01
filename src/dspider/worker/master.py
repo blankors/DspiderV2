@@ -86,7 +86,7 @@ class MasterService(master_service_pb2_grpc.MasterServiceServicer):
     def check_heartbeat(self):
         """定时检查Worker心跳，清理超时节点"""
         while True:
-            time.sleep(5)  # 每5秒检查一次
+            time.sleep(5)  # 每5秒检查一次。这5s内如果有节点心跳超时，会发生什么？该怎么办？
             with self.lock:
                 current_time = time.time()
                 timeout_workers = []

@@ -216,6 +216,81 @@ class RabbitMQServiceIntegrationTest(unittest.TestCase):
         new_message_count = result.method.message_count
         self.assertEqual(new_message_count, 0, "队列未清空")
 
-
+    def test_prefetchx(self):
+        """测试发布和消费消息"""
+        # 连接到RabbitMQ
+        rmq = RabbitMQService(
+                host=self.rabbitmq_config['host'],
+                port=self.rabbitmq_config['port'],
+                username=self.rabbitmq_config['username'],
+                password=self.rabbitmq_config['password'],
+                virtual_host=self.rabbitmq_config['virtualhost']
+            )
+        rmq.connect()
+        
+        # 声明队列
+        rmq.declare_queue(
+            self.test_queue_name,
+            durable=False,
+            auto_delete=True
+        )
+        
+        # 准备测试消息
+        test_messages = []
+        for i in range(30):
+            # test_messages.append({"key": "value", "number": i})
+            test_messages.append(str(i))
+        received_messages = []
+        
+        
+        # 启动消费者线程
+        import threading
+        # 定义消息处理函数
+        def message_handler(message_body, message_properties):
+            thname = threading.current_thread().name
+            if '2' in thname:
+                print(f"消费者线程 {threading.current_thread().name} 处理消息 {message_body}")
+            received_messages.append(message_body)
+            # 返回 True 表示需要确认消息
+            return True
+        def consume_messages():
+            import threading
+            print(f"消费者线程 {threading.current_thread().name} 启动")
+            rmq_x = RabbitMQService(
+                host=self.rabbitmq_config['host'],
+                port=self.rabbitmq_config['port'],
+                username=self.rabbitmq_config['username'],
+                password=self.rabbitmq_config['password'],
+                virtual_host=self.rabbitmq_config['virtualhost']
+            )
+            rmq_x.connect()
+            rmq_x.consume_messages(
+                queue_name=self.test_queue_name,
+                callback=message_handler,
+                auto_ack=False,
+                prefetch_count=10
+            )
+        
+        for i in range(3):
+            consumer_thread = threading.Thread(target=consume_messages)
+            consumer_thread.daemon = True
+            consumer_thread.start()
+        
+        # 等待消费者启动
+        time.sleep(0.5)
+        
+        # 发布消息
+        for test_message in test_messages:
+            rmq.publish(
+                message=test_message,
+                routing_key=self.test_queue_name
+            )
+        
+        # 等待消息被消费
+        max_wait_time = 5
+        start_time = time.time()
+        while not received_messages and time.time() - start_time < max_wait_time:
+            time.sleep(0.5)
+            
 if __name__ == '__main__':
     unittest.main()

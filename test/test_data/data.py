@@ -131,7 +131,23 @@ jd_config_tencent = {
     "social_index_url": "https://careers.tencent.com/search.html?query=at_1",
     "need_headers": False,
     "request_params": {
-        "api_url": "https://careers.tencent.com/tencentcareer/api/post/Query?timestamp=&countryId=&cityId=&bgIds=&productId=&categoryId=&parentCategoryId=&attrId=1&keyword=&pageIndex={0}&pageSize=10&language=zh-cn&area=cn",
+        "method": "GET",
+        "api_url": "https://careers.tencent.com/tencentcareer/api/post/Query",
+        "params": {
+            "timestamp": "",
+            "countryId": "",
+            "cityId": "",
+            "bgIds": "",
+            "productId": "",
+            "categoryId": "",
+            "parentCategoryId": "",
+            "attrId": 1,
+            "keyword": "",
+            "pageIndex": 0,
+            "pageSize": 10,
+            "language": "zh-cn",
+            "area": "cn"
+        },
         "headers": {
             "referer": "https://careers.tencent.com/search.html?query=at_1",
         },
@@ -142,8 +158,13 @@ jd_config_tencent = {
             "index_postdata": {}
         }
     },
-    "pagination": [1,1],
+    "pagination": [1,1,100],
     "parse_rule": {
+        "pagenum": {
+            "params": {
+                "cur": "pageIndex"
+            }
+        },
         "list_page": {
             "list_data": "Data.Posts",
             "url_rule": {
@@ -197,7 +218,19 @@ jd_result_tencent = {
     }
 }
 
-jd_round = {
+url = {
+    "id"
+    "config_id"
+    "pagenum": 3,
+    "cur": 3,
+    "round": 2,
+    "batch": 1,
+    "request_params": {
+        
+    }
+}
+
+round = {
     "id": "",
     "jd_config_id": "",
     "round": 1, # 什么情况作为一轮，由于数据异常的重试要算作一轮吗？
@@ -206,6 +239,8 @@ jd_round = {
         
     }
 }
+
+
 
 list_ = {
     "id": "",
